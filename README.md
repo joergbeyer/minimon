@@ -1,5 +1,14 @@
 # minimon
+
 minimon is a minimal monitoring package, focusing on disk stats.
+
+The agent keeps all the collected data just in RAM, writes no logfile and is
+just minimal invasive. It runs as a systemd daemon. It capture one measurement
+for each mountpoint once / minute and keeps 500 measurements (per mount point)
+in RAM. Once it get's to 500 measurements, then it will throw away the
+measrements, that are close to the previous once.
+
+It a mounitpoint is gone for 2 hours, then all that measrements are thrown away.
 
 ## building
 
