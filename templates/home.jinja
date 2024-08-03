@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Diskstatus for host {{hostname}}</title>
+  <script>
+ 
+ window.onload = function () {
+
+var chart = new CanvasJS.Chart("chartContainer", {
+  animationEnabled: false,
+  theme: "light2",
+  toolTip: {shareed: true},
+  title:{
+  text: "Percent Diskfree {{hostname}}"
+  },
+  axisX: {
+  valueFormatString: "DD.MM.YYYY H:mm"
+  },
+  axisY: {
+          valueFormatString: "###"
+        },
+  data: [
+        {% for key, values, _1 in rows %}
+        {        
+  type: "line",
+                name: "{{key}}",
+                showInLegend: true,
+        indexLabelFontSize: 16,
+  dataPoints: [
+  {% for ts, bt, bf, pct in values %}
+  {x: new Date({{ ts * 1000 }}), y: {{ pct }}},
+      {% endfor %}
+                        
+  ]
+        },
+        {% endfor %}
+  ]
+});
+chart.render();
+
+}
+  </script>
+  </head>
+  <body>
+    <h1>Diskstatus for host {{hostname}}</h1>
+    <div id="chartContainer" style="height: 300px; width: 100%;"></div>
+    <p>
+    <table border="1">
+	<tr><th>Mountpoint</th><th>capacity</th><th>free</th><th># measurements</th></tr>
+        {% for mp, values, (cur_bt, cur_bf, cnt) in rows %}
+	<tr> <td> {{ mp }}</td> <td> {{ cur_bt }}</td> <td> {{ cur_bf }}</td><td>{{cnt}}</td></tr>
+        {% endfor %}
+    </table>
+    </p>
+    <script src="https://cdn.canvasjs.com/canvasjs.min.js"></script>
+  </body>
+</html>
+

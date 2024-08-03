@@ -1,0 +1,15 @@
+[Unit]
+# Human readable name of the unit
+# this file: /lib/systemd/system/minimonagent.service
+Description=Service collect minimal disk usage stats
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/
+ExecStart=/usr/bin/minimonagent
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+
