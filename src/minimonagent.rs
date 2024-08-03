@@ -4,8 +4,7 @@ use minijinja::{context, Environment};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
-use std::mem;
+use std::{fmt, cmp};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,23 +14,21 @@ use std::{
 };
 use sysinfo::{Disks, System};
 
-const KEEP: usize = 100;
-const MEASURE_DELAY: u64 = 60; // 60 seconds
+const KEEP: usize = 500; // keep this many measurement in RAM. Per mountpoint.
+const MEASURE_DELAY: u64 = 60; // capture every MEASURE_DELAY seconds new measurements
 
-#[derive(Debug, Serialize)]
+fn get_now() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(n) => n.as_secs(),
+        Err(_) => 0, // panic!("no time"),
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
 struct DiskMeasurement {
     ts: u64, // seconds since epoch
     bytes_total: u64,
     bytes_free: u64,
-}
-
-fn get_now() -> u64 {
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(n) => n.as_secs(),
-        Err(_) => 0, // panic!("no time"),
-    };
-
-    now
 }
 
 impl fmt::Display for DiskMeasurement {
@@ -39,9 +36,68 @@ impl fmt::Display for DiskMeasurement {
         let pct = 100.0 * self.bytes_free as f32 / self.bytes_total as f32;
         write!(
             f,
-            "DiskMeasurement<{0} total: {1} free: {2} {pct:.2}>",
+            "<DiskMeasurement<{0} total: {1} free: {2} {pct:.2}>",
             self.ts, self.bytes_total, self.bytes_free
         )
+    }
+}
+
+fn consolidate_similar(v : &mut VecDeque<DiskMeasurement>) -> bool {
+    let mut to_be_removed_idxs = Vec::<usize>::new();
+
+    if v.len() >= 2 {
+        let mut prev = v.front().unwrap();
+        // if the disk size changed, keep the last of the old and the first of the new size
+        for i in 1..v.len()-1 {
+            let cur = v.get(i).unwrap();
+            if prev.bytes_total == cur.bytes_total {
+                let min_diff_in_bytes = cmp::max(1024, prev.bytes_total / 10000); // 0.01% but at least 1k
+                let diff = if prev.bytes_free > cur.bytes_free {
+                    prev.bytes_free - cur.bytes_free
+                } else {
+                    cur.bytes_free - prev.bytes_free
+                };
+                if diff <= min_diff_in_bytes {
+                    to_be_removed_idxs.push(i);
+                } else {
+                    prev = cur;
+                }
+            }
+        }
+    }
+    to_be_removed_idxs.sort();
+    to_be_removed_idxs.reverse();
+    for idx in to_be_removed_idxs.iter() {
+        v.remove(*idx);
+    }
+    /*
+    println!("v after consolidate_similar:");
+    for ve in v {
+        print!("{ve} ");
+    }
+    println!();
+*/
+    to_be_removed_idxs.len() > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_consolidate_similar() {
+        let mut v = VecDeque::<DiskMeasurement>::new();
+        assert!(!consolidate_similar(&mut v)); // chech that nothing changes for the empty vec
+        v.push_back(DiskMeasurement { ts:0, bytes_total: 100_000, bytes_free: 80_000});
+        assert!(!consolidate_similar(&mut v)); // chech that nothing changes for the vec with 1
+        // element
+        v.push_back(DiskMeasurement { ts:10, bytes_total: 100_000, bytes_free: 80_005});
+        v.push_back(DiskMeasurement { ts:20, bytes_total: 100_000, bytes_free: 78_000});
+        v.push_back(DiskMeasurement { ts:30, bytes_total: 100_000, bytes_free: 78_100});
+        v.push_back(DiskMeasurement { ts:40, bytes_total: 100_000, bytes_free: 78_100});
+        let v0 = v.clone();
+        assert!(consolidate_similar(&mut v));
+        assert_eq!(v0[0], v[0]);
+        assert_eq!([0, 20, 40], *v.into_iter().filter_map(|e| Some(e.ts)).collect::<Vec<_>>());
     }
 }
 
@@ -67,6 +123,8 @@ fn read_diskspace(
         }
         match m.get_mut(&mnt_name) {
             Some(q) => {
+                // min relevant difference is 0.01% but at least 1k
+                consolidate_similar(q );
                 // keep the size of the deque at / below a max.
                 while q.len() >= KEEP {
                     q.pop_front();
@@ -76,8 +134,6 @@ fn read_diskspace(
             None => {}
         }
     }
-    // TODO: remove the measurements from the hashmap when the mountpoint is gone "long enough",
-    // eg 2 hours.
 }
 
 fn convert_disk_measurement(dm: &DiskMeasurement) -> (u64, u64, u64, f32) {
@@ -116,11 +172,12 @@ fn send_home_html(
                 (
                     ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
                     ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
+                    tup.1.len(),
                 ),
             )
         }));
 
-        dbg!(&rows);
+        //dbg!(&rows);
 
         let contents = tmpl
             .render(context! {
@@ -146,7 +203,7 @@ fn send_home_json(
     {
         let hm = &*measurements.lock().unwrap();
         let contents = json!(hm).to_string();
-        dbg!(&contents);
+        // dbg!(&contents);
         let length = contents.len();
         let status_line = "HTTP/1.1 200 OK";
         response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{contents}");
@@ -168,7 +225,7 @@ fn handle_connection(
     let mut req = httparse::Request::new(&mut headers);
     let _res = req.parse(&buffer).unwrap();
     //dbg!(&res);
-    dbg!(&req);
+    //dbg!(&req);
 
     let ah: Vec<_> = req.headers.iter().filter(|h| h.name == "Accept").collect();
     //dbg!(&ah);
@@ -197,12 +254,28 @@ fn handle_connection(
     }
 }
 
+fn remove_old_mountpoints(
+    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
+    measurements_older_than: u64,
+) {
+    let m = &mut *measurements.lock().unwrap();
+
+    m.retain(|_k, v| match v.into_iter().last() {
+        Some(dm) => {
+            dm.ts > measurements_older_than
+        }
+        None => false,
+    });
+}
+
 fn measure_thread(measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>) {
     let mut measurements = measurements.clone();
     thread::spawn(move || loop {
         loop {
             let now = get_now();
             read_diskspace(now, &mut measurements);
+            remove_old_mountpoints(&mut measurements, now - 24*60*60); // remove if no new
+            // measurements for a day
 
             thread::sleep(Duration::from_secs(MEASURE_DELAY));
         }
@@ -231,7 +304,7 @@ fn main() {
         Some(name) => name,
         None => "horse_with_now_name".to_string(),
     };
-    dbg!(mem::size_of::<DiskMeasurement>());
+
     let mut env = Environment::new();
     env.add_template("home", include_str!("../templates/home.jinja"))
         .unwrap();
