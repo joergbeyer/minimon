@@ -1,0 +1,25 @@
+[package]
+name = "minimonitor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "minimonagent"
+path = "src/minimonagent.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = { version = "0.4.38", features = ["serde"] }
+itertools = "0.13.0"
+minijinja = "2.1.1"
+serde = { version = "1.0", features = ["derive"] }
+sysinfo = "0.31.2"
+bytesize = {version = "1.2.0", features = ["serde"]}
+httparse = "1.9.4"
+serde_json = "1.0.122"
+
+[profile.release]
+#opt-level = "z"  # Optimize for size.
+lto = true
+#target = "x86_64-unknown-linux-musl"

@@ -1,0 +1,7 @@
+#!/bin/bash
+
+id -u minimonagent &>/dev/null || useradd -M -s /bin/false minimonagent 
+
+systemctl enable minimonagent.service
+systemctl daemon-reload
+systemctl restart minimonagent.service
