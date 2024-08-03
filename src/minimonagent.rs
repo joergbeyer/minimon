@@ -70,13 +70,6 @@ fn consolidate_similar(v : &mut VecDeque<DiskMeasurement>) -> bool {
     for idx in to_be_removed_idxs.iter() {
         v.remove(*idx);
     }
-    /*
-    println!("v after consolidate_similar:");
-    for ve in v {
-        print!("{ve} ");
-    }
-    println!();
-*/
     to_be_removed_idxs.len() > 0
 }
 
@@ -124,10 +117,12 @@ fn read_diskspace(
         match m.get_mut(&mnt_name) {
             Some(q) => {
                 // min relevant difference is 0.01% but at least 1k
-                consolidate_similar(q );
-                // keep the size of the deque at / below a max.
-                while q.len() >= KEEP {
-                    q.pop_front();
+                if q.len() >= KEEP {
+                    consolidate_similar(q );
+                    // keep the size of the deque at / below a max.
+                    while q.len() >= KEEP {
+                        q.pop_front();
+                    }
                 }
                 q.push_back(dm);
             }
