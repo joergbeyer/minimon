@@ -297,7 +297,7 @@ fn main() {
 
     let hostname = match System::host_name() {
         Some(name) => name,
-        None => "horse_with_now_name".to_string(),
+        None => "horse_with_no_name".to_string(),
     };
 
     let mut env = Environment::new();
