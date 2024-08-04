@@ -57,5 +57,5 @@ $ curl -H "Accept: application/json" http://solar:9988/ | python -m json.tool -
 }
 ```
 
-The timestamp (`ts`) is in seconds since the EPOCH. you see a list of measurements
+The timestamp (`ts`) is in seconds since the EPOCH. you see a list of measurements. 
 

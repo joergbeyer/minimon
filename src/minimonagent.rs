@@ -1,21 +1,28 @@
+use axum::{
+    extract::State,
+    http::{
+        header::{HeaderMap, ACCEPT},
+        status::StatusCode,
+    },
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
+    Json,
+};
 use bytesize::ByteSize;
-use httparse;
-use minijinja::{context, Environment};
+use minijinja::render;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::{fmt, cmp};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{
-    io::prelude::*,
-    net::{TcpListener, TcpStream},
-};
+use std::{cmp, fmt};
 use sysinfo::{Disks, System};
+use tokio::net::TcpListener;
 
-const KEEP: usize = 500; // keep this many measurement in RAM. Per mountpoint.
-const MEASURE_DELAY: u64 = 60; // capture every MEASURE_DELAY seconds new measurements
+const KEEP: usize = 50; // keep this many measurement in RAM. Per mountpoint.
+const MEASURE_DELAY: u64 = 6; // capture every MEASURE_DELAY seconds new measurements
 
 fn get_now() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -42,13 +49,19 @@ impl fmt::Display for DiskMeasurement {
     }
 }
 
-fn consolidate_similar(v : &mut VecDeque<DiskMeasurement>) -> bool {
+#[derive(Debug, Clone)]
+struct AppState {
+    measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
+    hostname: String,
+}
+
+fn consolidate_similar(v: &mut VecDeque<DiskMeasurement>) -> bool {
     let mut to_be_removed_idxs = Vec::<usize>::new();
 
     if v.len() >= 2 {
         let mut prev = v.front().unwrap();
         // if the disk size changed, keep the last of the old and the first of the new size
-        for i in 1..v.len()-1 {
+        for i in 1..v.len() - 1 {
             let cur = v.get(i).unwrap();
             if prev.bytes_total == cur.bytes_total {
                 let min_diff_in_bytes = cmp::max(1024, prev.bytes_total / 10000); // 0.01% but at least 1k
@@ -80,24 +93,44 @@ mod tests {
     fn test_consolidate_similar() {
         let mut v = VecDeque::<DiskMeasurement>::new();
         assert!(!consolidate_similar(&mut v)); // chech that nothing changes for the empty vec
-        v.push_back(DiskMeasurement { ts:0, bytes_total: 100_000, bytes_free: 80_000});
+        v.push_back(DiskMeasurement {
+            ts: 0,
+            bytes_total: 100_000,
+            bytes_free: 80_000,
+        });
         assert!(!consolidate_similar(&mut v)); // chech that nothing changes for the vec with 1
-        // element
-        v.push_back(DiskMeasurement { ts:10, bytes_total: 100_000, bytes_free: 80_005});
-        v.push_back(DiskMeasurement { ts:20, bytes_total: 100_000, bytes_free: 78_000});
-        v.push_back(DiskMeasurement { ts:30, bytes_total: 100_000, bytes_free: 78_100});
-        v.push_back(DiskMeasurement { ts:40, bytes_total: 100_000, bytes_free: 78_100});
+                                               // element
+        v.push_back(DiskMeasurement {
+            ts: 10,
+            bytes_total: 100_000,
+            bytes_free: 80_005,
+        });
+        v.push_back(DiskMeasurement {
+            ts: 20,
+            bytes_total: 100_000,
+            bytes_free: 78_000,
+        });
+        v.push_back(DiskMeasurement {
+            ts: 30,
+            bytes_total: 100_000,
+            bytes_free: 78_100,
+        });
+        v.push_back(DiskMeasurement {
+            ts: 40,
+            bytes_total: 100_000,
+            bytes_free: 78_100,
+        });
         let v0 = v.clone();
         assert!(consolidate_similar(&mut v));
         assert_eq!(v0[0], v[0]);
-        assert_eq!([0, 20, 40], *v.into_iter().filter_map(|e| Some(e.ts)).collect::<Vec<_>>());
+        assert_eq!(
+            [0, 20, 40],
+            *v.into_iter().filter_map(|e| Some(e.ts)).collect::<Vec<_>>()
+        );
     }
 }
 
-fn read_diskspace(
-    now: u64,
-    measurements: &mut Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-) {
+fn read_diskspace(now: u64, m: &mut HashMap<String, VecDeque<DiskMeasurement>>) {
     for disk in &Disks::new_with_refreshed_list() {
         let mnt = disk.mount_point();
         let mnt_name: String = mnt.display().to_string();
@@ -110,7 +143,6 @@ fn read_diskspace(
         };
 
         // mountpoints come and go
-        let mut m = measurements.lock().unwrap();
         if !m.contains_key(&mnt_name) {
             m.insert(mnt_name.clone(), VecDeque::<DiskMeasurement>::new());
         }
@@ -118,7 +150,7 @@ fn read_diskspace(
             Some(q) => {
                 // min relevant difference is 0.01% but at least 1k
                 if q.len() >= KEEP {
-                    consolidate_similar(q );
+                    consolidate_similar(q);
                     // keep the size of the deque at / below a max.
                     while q.len() >= KEEP {
                         q.pop_front();
@@ -145,169 +177,96 @@ fn convert_disk_measurement(dm: &DiskMeasurement) -> (u64, u64, u64, f32) {
     )
 }
 
-fn send_home_html(
-    mut stream: TcpStream,
-    env: &Environment<'_>,
-    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-    hostname: &String,
-) {
-    let status_line = "HTTP/1.1 200 OK";
-    let tmpl = env.get_template("home").unwrap();
-    let response;
-    {
-        // keep the mutex lock scope short.
-        let hm = &*measurements.lock().unwrap();
-        let rows = Vec::from_iter(hm.iter().map(|tup| {
-            (
-                tup.0, // mount point
-                tup.1 // list of measurements
-                    .into_iter()
-                    .map(|dm| convert_disk_measurement(dm))
-                    .collect::<Vec<_>>(),
+fn match_str(input : &[u8], pat : &str) -> bool {
+    let s = match std::str::from_utf8(input) {
+        Ok(v) => v,
+        Err(_) => "",
+    };
+    s.contains(pat)
+}
+
+async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    //dbg!(&headers);
+    let accept_header = headers.get(ACCEPT);
+
+    match accept_header {
+        Some(ac) if match_str(ac.as_bytes(), "text/html") => {
+            let hm = &state.measurements.lock().unwrap();
+            let rows = Vec::from_iter(hm.iter().map(|tup| {
                 (
-                    ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
-                    ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
-                    tup.1.len(),
-                ),
-            )
-        }));
+                    tup.0, // mount point
+                    tup.1 // list of measurements
+                        .into_iter()
+                        .map(|dm| convert_disk_measurement(dm))
+                        .collect::<Vec<_>>(),
+                    (
+                        ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
+                        ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
+                        tup.1.len(),
+                    ),
+                )
+            }));
 
-        //dbg!(&rows);
-
-        let contents = tmpl
-            .render(context! {
-                hostname => hostname,
-                rows => rows,
-            })
-            .unwrap();
-
-        let length = contents.len();
-        response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-    }
-
-    stream.write_all(response.as_bytes()).unwrap();
-}
-
-fn send_home_json(
-    mut stream: TcpStream,
-    _env: &Environment<'_>,
-    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-    _hostname: &String,
-) {
-    let response;
-    {
-        let hm = &*measurements.lock().unwrap();
-        let contents = json!(hm).to_string();
-        // dbg!(&contents);
-        let length = contents.len();
-        let status_line = "HTTP/1.1 200 OK";
-        response = format!("{status_line}\r\nContent-Length: {length}\r\nContent-Type: application/json\r\n\r\n{contents}");
-    }
-
-    stream.write_all(response.as_bytes()).unwrap();
-}
-
-fn handle_connection(
-    mut stream: TcpStream,
-    env: &Environment<'_>,
-    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-    hostname: &String,
-) {
-    let mut buffer = [0; 10240];
-    stream.read(&mut buffer).unwrap();
-
-    let mut headers = [httparse::EMPTY_HEADER; 64];
-    let mut req = httparse::Request::new(&mut headers);
-    let _res = req.parse(&buffer).unwrap();
-    //dbg!(&res);
-    //dbg!(&req);
-
-    let ah: Vec<_> = req.headers.iter().filter(|h| h.name == "Accept").collect();
-    //dbg!(&ah);
-    let mut mimetypes: Vec<_> = Vec::<_>::new();
-    if ah.len() == 1 {
-        let s = match std::str::from_utf8(ah[0].value) {
-            Ok(v) => v,
-            Err(_) => "",
-        };
-        if s.len() > 0 {
-            mimetypes = s.split(",").collect();
+            let tmpl = include_str!("../templates/home.jinja");
+            let contents = render!(tmpl,
+                    hostname => state.hostname,
+                    rows => rows,
+            );
+            Html(contents).into_response()
         }
-    }
-
-    match req.path {
-        Some(path) => {
-            if path == "/" {
-                if mimetypes.contains(&"application/json") {
-                    send_home_json(stream, &env, &measurements, &hostname);
-                } else {
-                    send_home_html(stream, &env, &measurements, &hostname);
-                }
-            }
+        Some(ac) if match_str(ac.as_bytes(), "application/json") => {
+            let hm = &state.measurements.lock().unwrap();
+            Json(json!(**hm)).into_response()
         }
-        _ => (),
+
+        _ => StatusCode::BAD_REQUEST.into_response(),
     }
 }
 
 fn remove_old_mountpoints(
-    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
+    m: &mut HashMap<String, VecDeque<DiskMeasurement>>,
     measurements_older_than: u64,
 ) {
-    let m = &mut *measurements.lock().unwrap();
+    //let m = &mut *measurements.lock().unwrap();
 
     m.retain(|_k, v| match v.into_iter().last() {
-        Some(dm) => {
-            dm.ts > measurements_older_than
-        }
+        Some(dm) => dm.ts > measurements_older_than,
         None => false,
     });
 }
 
-fn measure_thread(measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>) {
-    let mut measurements = measurements.clone();
+fn measure_thread(measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>) {
     thread::spawn(move || loop {
         loop {
             let now = get_now();
-            read_diskspace(now, &mut measurements);
-            remove_old_mountpoints(&mut measurements, now - 24*60*60); // remove if no new
-            // measurements for a day
+            {
+                let m = &mut measurements.lock().unwrap();
+                read_diskspace(now, m);
+                remove_old_mountpoints(m, now - 24 * 60 * 60); // remove if no new measurements for a day
+            }
 
             thread::sleep(Duration::from_secs(MEASURE_DELAY));
         }
     });
 }
 
-fn httpserver_thread(
-    listener: &TcpListener,
-    env: &Environment<'_>,
-    measurements: &Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-    hostname: &String,
-) {
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-
-        handle_connection(stream, &env, &measurements, &hostname);
-    }
-}
-
-fn main() {
-    let addr = "0.0.0.0:9988";
-    let listener = TcpListener::bind(&addr).unwrap();
-    println!("Listening on: {}", addr);
-
+#[tokio::main]
+async fn main() {
     let hostname = match System::host_name() {
         Some(name) => name,
         None => "horse_with_no_name".to_string(),
     };
 
-    let mut env = Environment::new();
-    env.add_template("home", include_str!("../templates/home.jinja"))
-        .unwrap();
+    let shared_state = AppState {
+        measurements: Arc::new(Mutex::new(
+            HashMap::<String, VecDeque<DiskMeasurement>>::new(),
+        )),
+        hostname,
+    };
 
-    let measurements = Arc::new(Mutex::new(
-        HashMap::<String, VecDeque<DiskMeasurement>>::new(),
-    ));
+    measure_thread(shared_state.measurements.clone());
+    let app = Router::new().route("/", get(home)).with_state(shared_state);
 
-    measure_thread(&measurements);
-    httpserver_thread(&listener, &env, &measurements, &hostname);
+    let listener = TcpListener::bind("0.0.0.0:9988").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

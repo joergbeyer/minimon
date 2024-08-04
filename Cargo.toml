@@ -18,6 +18,8 @@ sysinfo = "0.31.2"
 bytesize = {version = "1.2.0", features = ["serde"]}
 httparse = "1.9.4"
 serde_json = "1.0.122"
+axum = "0.7.5"
+tokio = { version = "1.39.2", features = ["full"] }
 
 [profile.release]
 #opt-level = "z"  # Optimize for size.
