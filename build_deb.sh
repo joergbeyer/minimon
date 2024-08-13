@@ -20,4 +20,4 @@ install -m 0644 changelog.Debian minimonagent/usr/share/doc/minimonagent/changel
 gzip -n -f -9 minimonagent/usr/share/doc/minimonagent/changelog.Debian
 install -m 0644 copyright minimonagent/usr/share/doc/minimonagent/
 
-dpkg-deb --root-owner-group --build "${PKG_NAME:?}""
+dpkg-deb --root-owner-group --build "${PKG_NAME:?}"
