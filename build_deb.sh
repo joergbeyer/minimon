@@ -2,7 +2,7 @@
 
 export DEBEMAIL="joerg.beyer@gmail.com"
 export DEBFULLNAME="Joerg Beyer"
-export PKG_NAME="minimonagent-`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`.deb"
+export PKG_NAME="minimonagent-`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`_amd64.deb"
 
 #mkdir minimonagent
 install -d minimonagent/usr/bin minimonagent/lib/systemd/system/ minimonagent/usr/share/doc/minimonagent minimonagent/DEBIAN
