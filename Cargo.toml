@@ -7,6 +7,10 @@ edition = "2021"
 name = "minimonagent"
 path = "src/minimonagent.rs"
 
+[lib]
+name = "minimonitor"
+path = "src/minimon.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -18,10 +22,17 @@ sysinfo = "0.31.2"
 bytesize = {version = "1.2.0", features = ["serde"]}
 httparse = "1.9.4"
 serde_json = "1.0.122"
-axum = "0.7.5"
+axum = { version = "0.7.5", features = ["query"] }
 tokio = { version = "1.39.2", features = ["full"] }
+
+[dev-dependencies]
+criterion = "0.5.1"
 
 [profile.release]
 #opt-level = "z"  # Optimize for size.
 lto = true
 #target = "x86_64-unknown-linux-musl"
+
+[[bench]]
+name = "my_benchmark"
+harness = false
