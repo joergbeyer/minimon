@@ -2,7 +2,7 @@
 
 export DEBEMAIL="joerg.beyer@gmail.com"
 export DEBFULLNAME="Joerg Beyer"
-export PKG_NAME="minimonagent-`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`"
+export PKG_NAME="minimonagent-`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`.deb"
 
 #mkdir minimonagent
 install -d minimonagent/usr/bin minimonagent/lib/systemd/system/ minimonagent/usr/share/doc/minimonagent minimonagent/DEBIAN
@@ -20,4 +20,4 @@ install -m 0644 changelog.Debian minimonagent/usr/share/doc/minimonagent/changel
 gzip -n -f -9 minimonagent/usr/share/doc/minimonagent/changelog.Debian
 install -m 0644 copyright minimonagent/usr/share/doc/minimonagent/
 
-dpkg-deb --root-owner-group --build "${PKG_NAME:?}"
+dpkg-deb --root-owner-group --build minimonagent "${PKG_NAME:?}"
