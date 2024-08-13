@@ -30,6 +30,9 @@ cargo run --release
 the agent will listen on port `9988` and show simple stats like this:
 ![screenshot](images/demo.png)
 
+Here is an example of an agent with a temporary mount point (while a backup is taken). See the bluedots at the bottom for ca 3 minutes, while [backintime](https://github.com/bit-team/backintime) briefly mounted this machine to take a backup.
+![screenshot](images/agent_with_temp_mp.png)
+
 You can grab the data as json:
 ```
 $ curl -H "Accept: application/json" http://solar:9988/ | python -m json.tool - 
