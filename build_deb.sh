@@ -12,7 +12,8 @@ cargo build --release
 
 install DEBIAN/control minimonagent/DEBIAN/
 install DEBIAN/postinst minimonagent/DEBIAN/
-install -s target/x86_64-unknown-linux-musl/release/minimonagent minimonagent/usr/bin/minimonagent
+#install -s target/x86_64-unknown-linux-musl/release/minimonagent minimonagent/usr/bin/minimonagent
+install -s target/release/minimonagent minimonagent/usr/bin/minimonagent
 install -m 0644 minimonagent.service minimonagent/lib/systemd/system
 install -m 0644 changelog.Debian minimonagent/usr/share/doc/minimonagent/changelog.Debian
 gzip -n -f -9 minimonagent/usr/share/doc/minimonagent/changelog.Debian
