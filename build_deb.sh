@@ -6,7 +6,8 @@ export DEBFULLNAME="Joerg Beyer"
 #mkdir minimonagent
 install -d minimonagent/usr/bin minimonagent/lib/systemd/system/ minimonagent/usr/share/doc/minimonagent minimonagent/DEBIAN
 
-cargo build --release --target=x86_64-unknown-linux-musl
+#cargo build --release --target=x86_64-unknown-linux-musl
+cargo build --release
 
 
 install DEBIAN/control minimonagent/DEBIAN/
