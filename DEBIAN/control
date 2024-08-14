@@ -1,9 +1,0 @@
-Package: minimonagent
-Version: 0.1-1
-Section: utils
-Priority: optional
-Architecture: amd64
-Pre-Depends: libc6
-Maintainer: Joerg Beyer <joerg.beyer@gmail.com>
-Description: This is the agent to collect disk usage data
- for minimon.
