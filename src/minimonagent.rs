@@ -1,6 +1,6 @@
 use axum::{routing::get, Router};
 use clap::Parser;
-use dotenv::dotenv;
+//use dotenv::dotenv;
 use minimonitor::{home, measure_disk_thread, AppState, DiskMeasurement};
 use std::collections::{HashMap, VecDeque};
 use std::env;
@@ -26,7 +26,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    dotenv().ok();
+    //dotenv().ok();
 
     let versionstr = get_my_version();
     let args = Args::parse();
