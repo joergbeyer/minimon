@@ -1,7 +1,7 @@
 use axum::{routing::get, Router};
 use clap::Parser;
 //use dotenv::dotenv;
-use minimonitor::{home, measure_disk_thread, AppState, DiskMeasurement};
+use minimonitor::{current, home, measure_disk_thread, AppState, DiskMeasurement};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -49,8 +49,11 @@ async fn main() {
         versionstr,
     };
 
-    measure_disk_thread(shared_state.measurements.clone());
-    let app = Router::new().route("/", get(home)).with_state(shared_state);
+    measure_disk_thread(shared_state.measurements.clone(), args.interval);
+    let app = Router::new()
+        .route("/", get(home))
+        .route("/current", get(current))
+        .with_state(shared_state);
 
     let listener = TcpListener::bind("0.0.0.0:".to_string() + &args.port.to_string())
         .await

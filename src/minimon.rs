@@ -19,7 +19,6 @@ use std::{cmp, fmt};
 use sysinfo::{Disk, Disks};
 
 const KEEP: usize = 500; // keep this many measurement in RAM. Per mountpoint.
-const MEASURE_DELAY: u64 = 6; // capture every MEASURE_DELAY seconds new measurements
 
 fn get_now() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -315,6 +314,78 @@ pub async fn home(
     }
 }
 
+fn get_recent_measurements(
+    hm: &HashMap<String, VecDeque<DiskMeasurement>>,
+) -> Vec<(
+    &std::string::String,
+    std::option::Option<&DiskMeasurement>,
+    (std::string::String, std::string::String),
+)> {
+    let rows = Vec::from_iter(hm.iter().map(|tup| {
+        (
+            tup.0, // mount point
+            tup.1 // (bytes total, bytes_free) from the most recent
+                // measurement
+                .into_iter()
+                .last(),
+            (
+                ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
+                ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
+            ),
+        )
+    }));
+
+    rows
+}
+// $ curl -H 'accept: application/json' http://localhost:9988/current | python -m json.tool
+pub async fn current(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _params: Query<HomeParams>,
+) -> Response {
+    //dbg!(&params);
+    //dbg!(&headers);
+    let accept_header = headers.get(ACCEPT);
+
+    match accept_header {
+        Some(ac) if match_str(ac.as_bytes(), "text/html") => {
+            let hm = &state.measurements.lock().unwrap();
+
+            // one row per mountpoint.
+            let rows = get_recent_measurements(&hm);
+            /*
+                        let rows = Vec::from_iter(hm.iter().map(|tup| {
+                            (
+                                tup.0, // mount point
+                                tup.1 // (bytes total, bytes_free) from the most recent
+                                    // measurement
+                                    .into_iter()
+                                    .last(),
+                                (
+                                    ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
+                                    ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
+                                ),
+                            )
+                        }));
+            */
+            let tmpl = include_str!("../templates/current.jinja");
+            let contents = render!(tmpl,
+                hostname => state.hostname,
+                rows => rows,
+                versionstr => state.versionstr,
+            );
+            Html(contents).into_response()
+        }
+        Some(ac) if match_str(ac.as_bytes(), "application/json") => {
+            let hm = &state.measurements.lock().unwrap();
+            let rows = get_recent_measurements(&hm);
+            Json(json!(rows)).into_response()
+        }
+
+        _ => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
 fn remove_old_mountpoints(
     m: &mut HashMap<String, VecDeque<DiskMeasurement>>,
     measurements_older_than: u64,
@@ -327,7 +398,10 @@ fn remove_old_mountpoints(
     });
 }
 
-pub fn measure_disk_thread(measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>) {
+pub fn measure_disk_thread(
+    measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
+    interval: u32,
+) {
     thread::spawn(move || loop {
         loop {
             let now = get_now();
@@ -337,7 +411,8 @@ pub fn measure_disk_thread(measurements: Arc<Mutex<HashMap<String, VecDeque<Disk
                 remove_old_mountpoints(m, now - 24 * 60 * 60); // remove if no new measurements for a day
             }
 
-            thread::sleep(Duration::from_secs(MEASURE_DELAY));
+            // thread::sleep(Duration::from_secs(MEASURE_DELAY));
+            thread::sleep(Duration::from_secs(interval as u64));
         }
     });
 }
