@@ -7,7 +7,7 @@ import os
 t = """\
 Package: minimonagent
 Version: {{ version }}-{{ release }}
-Section: utils
+Section: main
 Priority: optional
 Architecture: {{arch}}
 Pre-Depends: libc6
@@ -18,7 +18,6 @@ Description: This is the agent to collect disk usage data
 """
 
 if __name__ == '__main__':
-    print('ok.')
     load_dotenv()
 
     version = os.environ["VERSION"]
