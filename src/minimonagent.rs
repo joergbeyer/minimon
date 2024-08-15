@@ -8,18 +8,8 @@ use std::sync::{Arc, Mutex};
 use sysinfo::System;
 use tokio::net::TcpListener;
 
-fn get_my_version() -> String {
-    let version = match env::var("VERSION") {
-        Ok(val) => val,
-        Err(_e) => "unkown_version".to_string(),
-    };
-    let release = match env::var("RELEASE") {
-        Ok(val) => val,
-        Err(_e) => "unkown_release".to_string(),
-    };
-
-    format!("{version}-{release}")
-}
+// auto generated with build.rs
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None, disable_version_flag = true)]
