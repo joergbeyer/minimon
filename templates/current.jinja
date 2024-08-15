@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Current Diskstatus for host {{hostname}}</title>
+  </head>
+  <body>
+    <h1>Current Diskstatus for host {{hostname}}</h1>
+    <p>
+    <table border="1">
+	<tr><th>Mountpoint</th><th>capacity</th><th>free</th></tr>
+        {% for mp, values, (cur_bt, cur_bf) in rows %}
+	<tr> <td> {{ mp }}</td> <td> {{ cur_bt }}</td> <td> {{ cur_bf }}</td></tr>
+        {% endfor %}
+    </table>
+    </p>
+    <hr/>
+    <p>minimonagent {{versionstr}}</p>
+    <script src="https://cdn.canvasjs.com/canvasjs.min.js"></script>
+  </body>
+</html>
+
