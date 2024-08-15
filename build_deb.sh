@@ -3,7 +3,7 @@
 # set VERSION and RELEASE from the .env file
 . .env
 
-export PKG_PATH="dist/`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`/main/"
+export PKG_PATH="dist/`lsb_release -is 2>/dev/null`-`lsb_release -rs 2>/dev/null`/main/binary-amd64"
 export PKG_NAME="minimonagent-${VERSION:?}-${RELEASE:?}_amd64.deb"
 
 
