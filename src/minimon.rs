@@ -50,6 +50,7 @@ impl fmt::Display for DiskMeasurement {
 pub struct AppState {
     pub measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
     pub hostname: String,
+    pub versionstr: String,
 }
 
 fn consolidate_similar(v: &mut VecDeque<DiskMeasurement>) -> bool {
@@ -293,8 +294,9 @@ pub async fn home(
 
             let tmpl = include_str!("../templates/home.jinja");
             let contents = render!(tmpl,
-                    hostname => state.hostname,
-                    rows => rows,
+                hostname => state.hostname,
+                rows => rows,
+                versionstr => state.versionstr,
             );
             Html(contents).into_response()
         }
