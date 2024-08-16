@@ -9,6 +9,7 @@ use axum::{
 };
 use bytesize::ByteSize;
 use minijinja::render;
+use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
@@ -17,6 +18,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cmp, fmt};
 use sysinfo::{Disk, Disks};
+use tokio::runtime::Runtime;
 
 const KEEP: usize = 500; // keep this many measurement in RAM. Per mountpoint.
 
@@ -27,7 +29,7 @@ fn get_now() -> u64 {
     }
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct DiskMeasurement {
     ts: u64, // seconds since epoch
     bytes_total: u64,
@@ -45,9 +47,12 @@ impl fmt::Display for DiskMeasurement {
     }
 }
 
+pub type DiskMeasurementMap = HashMap<String, VecDeque<DiskMeasurement>>;
+
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
+    pub local_measurements: Arc<Mutex<DiskMeasurementMap>>,
+    pub remote_measurements: Arc<Mutex<HashMap<(String, String), DiskMeasurement>>>,
     pub hostname: String,
     pub versionstr: String,
 }
@@ -141,11 +146,7 @@ fn read_diskspace(now: u64, disk: &Disk) -> (String, DiskMeasurement) {
     (mnt_name, dm)
 }
 
-fn add_diskmeasurement(
-    m: &mut HashMap<String, VecDeque<DiskMeasurement>>,
-    mnt_name: String,
-    dm: DiskMeasurement,
-) {
+fn add_diskmeasurement(m: &mut DiskMeasurementMap, mnt_name: String, dm: DiskMeasurement) {
     // mountpoints come and go
     if !m.contains_key(&mnt_name) {
         m.insert(mnt_name.clone(), VecDeque::<DiskMeasurement>::new());
@@ -166,7 +167,7 @@ fn add_diskmeasurement(
     }
 }
 
-pub fn read_diskspaces(now: u64, m: &mut HashMap<String, VecDeque<DiskMeasurement>>) {
+pub fn read_diskspaces(now: u64, m: &mut DiskMeasurementMap) {
     for disk in &Disks::new_with_refreshed_list() {
         let (mnt_name, dm) = read_diskspace(now, disk);
         add_diskmeasurement(m, mnt_name, dm);
@@ -201,11 +202,8 @@ pub struct HomeParams {
     since: u64,
 }
 
-pub fn create_filtered_copy_dms(
-    orig: &HashMap<String, VecDeque<DiskMeasurement>>,
-    threshold: u64,
-) -> HashMap<String, VecDeque<DiskMeasurement>> {
-    let mut c = HashMap::<String, VecDeque<DiskMeasurement>>::new();
+pub fn create_filtered_copy_dms(orig: &DiskMeasurementMap, threshold: u64) -> DiskMeasurementMap {
+    let mut c = DiskMeasurementMap::new();
     for (k, v) in orig.iter() {
         let mut v = v.clone();
         v.retain(|dm| dm.ts >= threshold);
@@ -217,7 +215,7 @@ pub fn create_filtered_copy_dms(
 mod test_create_filtered_copy_dms {
     use super::*;
 
-    fn gen_testdata(dms: &mut HashMap<String, VecDeque<DiskMeasurement>>, mp: &String) {
+    fn gen_testdata(dms: &mut DiskMeasurementMap, mp: &String) {
         if !dms.contains_key(mp) {
             dms.insert(mp.clone(), VecDeque::<DiskMeasurement>::new());
         }
@@ -234,7 +232,7 @@ mod test_create_filtered_copy_dms {
     }
     #[test]
     fn test_create_filtered_copy_dms() {
-        let mut dms = HashMap::<String, VecDeque<DiskMeasurement>>::new();
+        let mut dms = DiskMeasurementMap::new();
         let mp = String::from("my_only_mp");
         gen_testdata(&mut dms, &mp);
         assert_eq!(1, dms.len());
@@ -274,7 +272,7 @@ pub async fn home(
 
     match accept_header {
         Some(ac) if match_str(ac.as_bytes(), "text/html") => {
-            let hm = &state.measurements.lock().unwrap();
+            let hm = &state.local_measurements.lock().unwrap();
             let rows = Vec::from_iter(hm.iter().map(|tup| {
                 (
                     tup.0, // mount point
@@ -300,7 +298,7 @@ pub async fn home(
             Html(contents).into_response()
         }
         Some(ac) if match_str(ac.as_bytes(), "application/json") => {
-            let hm = &state.measurements.lock().unwrap();
+            let hm = &state.local_measurements.lock().unwrap();
             if params.since > 0 {
                 // create a copy and cut off the older measurements
                 let c = create_filtered_copy_dms(&hm, params.since);
@@ -315,23 +313,15 @@ pub async fn home(
 }
 
 fn get_recent_measurements(
-    hm: &HashMap<String, VecDeque<DiskMeasurement>>,
-) -> Vec<(
-    &std::string::String,
-    std::option::Option<&DiskMeasurement>,
-    (std::string::String, std::string::String),
-)> {
-    let rows = Vec::from_iter(hm.iter().map(|tup| {
+    hm: &DiskMeasurementMap,
+) -> Vec<(std::string::String, std::option::Option<&DiskMeasurement>)> {
+    let rows = Vec::from_iter(hm.iter().map(move |tup| {
         (
-            tup.0, // mount point
+            tup.0.clone(), // mount point
             tup.1 // (bytes total, bytes_free) from the most recent
                 // measurement
                 .into_iter()
                 .last(),
-            (
-                ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
-                ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
-            ),
         )
     }));
 
@@ -346,38 +336,24 @@ pub async fn current(
     //dbg!(&params);
     //dbg!(&headers);
     let accept_header = headers.get(ACCEPT);
+    let hostname = state.hostname.clone();
 
     match accept_header {
         Some(ac) if match_str(ac.as_bytes(), "text/html") => {
-            let hm = &state.measurements.lock().unwrap();
+            let hm = &state.local_measurements.lock().unwrap();
 
-            // one row per mountpoint.
+            // one row per (hostname, mountpoint).
             let rows = get_recent_measurements(&hm);
-            /*
-                        let rows = Vec::from_iter(hm.iter().map(|tup| {
-                            (
-                                tup.0, // mount point
-                                tup.1 // (bytes total, bytes_free) from the most recent
-                                    // measurement
-                                    .into_iter()
-                                    .last(),
-                                (
-                                    ByteSize(tup.1.into_iter().last().unwrap().bytes_total).to_string(),
-                                    ByteSize(tup.1.into_iter().last().unwrap().bytes_free).to_string(),
-                                ),
-                            )
-                        }));
-            */
+            dbg!(&rows);
             let tmpl = include_str!("../templates/current.jinja");
             let contents = render!(tmpl,
-                hostname => state.hostname,
                 rows => rows,
                 versionstr => state.versionstr,
             );
             Html(contents).into_response()
         }
         Some(ac) if match_str(ac.as_bytes(), "application/json") => {
-            let hm = &state.measurements.lock().unwrap();
+            let hm = &state.local_measurements.lock().unwrap();
             let rows = get_recent_measurements(&hm);
             Json(json!(rows)).into_response()
         }
@@ -386,10 +362,44 @@ pub async fn current(
     }
 }
 
-fn remove_old_mountpoints(
-    m: &mut HashMap<String, VecDeque<DiskMeasurement>>,
-    measurements_older_than: u64,
-) {
+fn print_type_of<T>(_: &T) {
+    println!("{}", std::any::type_name::<T>());
+}
+pub async fn overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _params: Query<HomeParams>,
+) -> Response {
+    //dbg!(&params);
+    //dbg!(&headers);
+    let accept_header = headers.get(ACCEPT);
+    let hostname = state.hostname.clone();
+
+    match accept_header {
+        Some(ac) if match_str(ac.as_bytes(), "text/html") => {
+            print_type_of(&state.remote_measurements);
+            let rows = state.remote_measurements.lock().unwrap();
+            print_type_of(&rows);
+            dbg!(&rows);
+            // one row per (hostname, mountpoint).
+            let tmpl = include_str!("../templates/overview.jinja");
+            let contents = render!(tmpl,
+                rows => *rows,
+                versionstr => state.versionstr,
+            );
+            Html(contents).into_response()
+        }
+        Some(ac) if match_str(ac.as_bytes(), "application/json") => {
+            let hm = &state.local_measurements.lock().unwrap();
+            let rows = get_recent_measurements(&hm);
+            Json(json!(rows)).into_response()
+        }
+
+        _ => StatusCode::BAD_REQUEST.into_response(),
+    }
+}
+
+fn remove_old_mountpoints(m: &mut DiskMeasurementMap, measurements_older_than: u64) {
     //let m = &mut *measurements.lock().unwrap();
 
     m.retain(|_k, v| match v.into_iter().last() {
@@ -398,10 +408,8 @@ fn remove_old_mountpoints(
     });
 }
 
-pub fn measure_disk_thread(
-    measurements: Arc<Mutex<HashMap<String, VecDeque<DiskMeasurement>>>>,
-    interval: u32,
-) {
+pub fn measure_local_disk_thread(measurements: Arc<Mutex<DiskMeasurementMap>>, interval: u32) {
+    println!("starting measure_local_disk_thread");
     thread::spawn(move || loop {
         loop {
             let now = get_now();
@@ -411,7 +419,94 @@ pub fn measure_disk_thread(
                 remove_old_mountpoints(m, now - 24 * 60 * 60); // remove if no new measurements for a day
             }
 
-            // thread::sleep(Duration::from_secs(MEASURE_DELAY));
+            thread::sleep(Duration::from_secs(interval as u64));
+        }
+    });
+}
+
+pub async fn collect_remote(
+    url: &str,
+) -> Option<
+    Vec<(
+        std::string::String,
+        std::option::Option<DiskMeasurement>,
+        (std::string::String, std::string::String),
+    )>,
+> {
+    println!("starting collect_remote({url})");
+    match reqwest::Client::new()
+        .get(url)
+        .header(ACCEPT, "application/json")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            //dbg!(&resp);
+            let mp_list = resp
+                .json::<Vec<(
+                    std::string::String,
+                    std::option::Option<DiskMeasurement>,
+                    (std::string::String, std::string::String),
+                )>>()
+                .await
+                .ok()?;
+            //let json: serde_json::Value = resp.json().await.ok()?;
+            dbg!(&mp_list);
+            Some(mp_list)
+        }
+        Err(err) => {
+            //println!("Reqwest for {} Error: {}", url, err);
+            //dbg!(&err);
+            None
+        }
+    }
+}
+
+pub fn collect_remote_disk_thread(
+    measurements: Arc<Mutex<HashMap<(String, String), DiskMeasurement>>>,
+    interval: u32,
+) {
+    println!("starting collect_remote_disk_thread");
+    thread::spawn(move || loop {
+        // TODO: to be configured.
+        let remotes = vec![
+            "http://build:9988/current",
+            "http://solar:9988/current",
+            "http://repo:9988/current",
+            "http://mail:9988/current",
+            "http://photosync:9988/current",
+            "http://calvin:9988/current",
+            "http://non_existent_host:1234/current",
+        ];
+        dbg!(&remotes);
+
+        loop {
+            for remote in &remotes {
+                //dbg!(&remote);
+                match Runtime::new().unwrap().block_on(collect_remote(&remote)) {
+                    Some(m) => {
+                        //dbg!(&m);
+                        for (mountpoint, dm, _) in &m {
+                            //dbg!(&mountpoint);
+                            match dm {
+                                Some(dm) => {
+                                    //dbg!(&dm);
+                                    let mut mm = measurements.lock().unwrap();
+                                    mm.insert((remote.to_string(), mountpoint.clone()), dm.clone());
+                                    // dbg!(&mm);
+                                }
+                                None => (),
+                            }
+                        }
+                    }
+                    _ => {
+                        // in case of an error: remove old entries for this key.
+                        let mut mm = measurements.lock().unwrap();
+                        mm.retain(|(hn, _), v| hn != remote);
+                    }
+                }
+            }
+
             thread::sleep(Duration::from_secs(interval as u64));
         }
     });

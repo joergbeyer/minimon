@@ -8,12 +8,13 @@
     <h1>Current Diskstatus for {{ hostname }}</h1>
     <p>
     <table border="1">
-	<tr><th>Host</th><th>Mountpoint</th><th>other</th></tr>
-        {% for hn, mp, dm in rows %}
-	<tr> 
-          <td> {{ hn }}</td>
-          <td> {{ mp }}</td>
-          <td> {{ dm.ts }} free: {{ dm.bytes_free}} total: {{ dm.bytes_total}}</td>
+        <tr><th>Host</th><th>Mountpoint</th><th>Free</th><th>Total</th></tr>
+        {% for key in rows %}
+	<tr>
+          <td> <a href="{{ key[0] }}">{{key[0]}}</a></td>
+          <td> {{key[1]}}</td>
+          <td> {{ rows[key].bytes_free }}</td>
+          <td> {{ rows[key].bytes_total }}</td>
         </tr>
         {% endfor %}
     </table>

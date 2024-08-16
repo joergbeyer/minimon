@@ -1,7 +1,9 @@
 use axum::{routing::get, Router};
 use clap::Parser;
-//use dotenv::dotenv;
-use minimonitor::{current, home, measure_disk_thread, AppState, DiskMeasurement};
+use minimonitor::{
+    collect_remote_disk_thread, current, home, measure_local_disk_thread, overview, AppState,
+    DiskMeasurement, DiskMeasurementMap,
+};
 use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -26,8 +28,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    //dotenv().ok();
-
     let versionstr = get_my_version();
     let args = Args::parse();
 
@@ -42,17 +42,20 @@ async fn main() {
     };
 
     let shared_state = AppState {
-        measurements: Arc::new(Mutex::new(
-            HashMap::<String, VecDeque<DiskMeasurement>>::new(),
+        local_measurements: Arc::new(Mutex::new(DiskMeasurementMap::new())),
+        remote_measurements: Arc::new(Mutex::new(
+            HashMap::<(String, String), DiskMeasurement>::new(),
         )),
         hostname,
         versionstr,
     };
 
-    measure_disk_thread(shared_state.measurements.clone(), args.interval);
+    measure_local_disk_thread(shared_state.local_measurements.clone(), args.interval);
+    collect_remote_disk_thread(shared_state.remote_measurements.clone(), args.interval);
     let app = Router::new()
         .route("/", get(home))
         .route("/current", get(current))
+        .route("/overview", get(overview))
         .with_state(shared_state);
 
     let listener = TcpListener::bind("0.0.0.0:".to_string() + &args.port.to_string())
