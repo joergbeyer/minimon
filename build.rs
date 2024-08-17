@@ -27,5 +27,5 @@ fn main() {
 
     fs::write(&dest_path, my_fun).unwrap();
     println!("cargo::rerun-if-changed=.env");
-    println!("cargo::rerun-if-changed=build.rs");
+    //println!("cargo::rerun-if-changed=build.rs");
 }

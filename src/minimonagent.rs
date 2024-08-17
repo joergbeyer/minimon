@@ -4,7 +4,7 @@ use minimonitor::{
     collect_remote_disk_thread, current, home, measure_local_disk_thread, overview, AppState,
     DiskMeasurement, DiskMeasurementMap,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex};
 use sysinfo::System;

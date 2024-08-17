@@ -336,7 +336,6 @@ pub async fn current(
     //dbg!(&params);
     //dbg!(&headers);
     let accept_header = headers.get(ACCEPT);
-    let hostname = state.hostname.clone();
 
     match accept_header {
         Some(ac) if match_str(ac.as_bytes(), "text/html") => {
@@ -373,7 +372,6 @@ pub async fn overview(
     //dbg!(&params);
     //dbg!(&headers);
     let accept_header = headers.get(ACCEPT);
-    let hostname = state.hostname.clone();
 
     match accept_header {
         Some(ac) if match_str(ac.as_bytes(), "text/html") => {
@@ -454,7 +452,7 @@ pub async fn collect_remote(
             dbg!(&mp_list);
             Some(mp_list)
         }
-        Err(err) => {
+        Err(_err) => {
             //println!("Reqwest for {} Error: {}", url, err);
             //dbg!(&err);
             None
@@ -502,7 +500,7 @@ pub fn collect_remote_disk_thread(
                     _ => {
                         // in case of an error: remove old entries for this key.
                         let mut mm = measurements.lock().unwrap();
-                        mm.retain(|(hn, _), v| hn != remote);
+                        mm.retain(|(hn, _), _value| hn != remote);
                     }
                 }
             }

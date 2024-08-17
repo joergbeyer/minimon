@@ -3,4 +3,5 @@
 Cargo.lock
 *.deb
 dist/
+DEBIAN/control
 
